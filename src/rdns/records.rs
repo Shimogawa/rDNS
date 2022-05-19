@@ -154,6 +154,22 @@ impl DNSRdata {
         writer.write(&buf)?;
         Ok(())
     }
+
+    fn get_type(&self) -> Option<DNSType> {
+        let t = match self {
+            Self::A(_) => DNSType::A,
+            Self::Aaaa(_) => DNSType::AAAA,
+            Self::Cname(_) => DNSType::CNAME,
+            Self::Ns(_) => DNSType::NS,
+            Self::Txt(_) => DNSType::TXT,
+            Self::Other(_) => DNSType::NotImplemented,
+        };
+        if t != DNSType::NotImplemented {
+            Some(t)
+        } else {
+            None
+        }
+    }
 }
 
 pub trait ReadDomainName {
@@ -186,7 +202,7 @@ impl ReadDomainName for Cursor<&[u8]> {
     }
 }
 
-#[derive(FromPrimitive, Debug, Copy, Clone)]
+#[derive(FromPrimitive, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum DNSType {
     A = 1,
     NS = 2,
@@ -450,7 +466,14 @@ impl DNSResourceRecord {
 
     pub fn to_bytes(&self, writer: &mut Vec<u8>) -> Result<()> {
         writer.write(&self.name.to_bytes()?)?;
-        writer.write_u16::<BigEndian>(self.r#type)?;
+        // use `rdata` type first, if is type "other",
+        // use the `type` field
+        writer.write_u16::<BigEndian>(
+            self.rdata
+                .get_type()
+                .map(|x| x as u16)
+                .unwrap_or(self.r#type),
+        )?;
         writer.write_u16::<BigEndian>(self.class)?;
         writer.write_u32::<BigEndian>(self.ttl)?;
         self.rdata.to_bytes(writer)?;
