@@ -1,3 +1,4 @@
+use crate::rdns::domain_name::{DomainName, DomainNameToBytes, ToReadableName};
 use crate::rdns::util::{ReadExt, Result};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use num_derive::FromPrimitive;
@@ -6,53 +7,6 @@ use std::fmt::Debug;
 use std::io::{Cursor, Write};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::rc::Rc;
-
-type DomainName = Vec<String>;
-
-pub trait ToDomainName {
-    fn to_domain_name(&self) -> DomainName;
-}
-
-impl ToDomainName for String {
-    fn to_domain_name(&self) -> DomainName {
-        self.split(".").map(|x| x.to_string()).collect()
-    }
-}
-
-pub trait ToReadableName {
-    fn to_domain_name(&self) -> String;
-}
-
-impl ToReadableName for DomainName {
-    fn to_domain_name(&self) -> String {
-        if self.is_empty() {
-            return String::from(".");
-        }
-        let mut res = String::new();
-        for x in self {
-            res.push_str(x);
-            res.push('.');
-        }
-        res.remove(res.len() - 1);
-        res
-    }
-}
-
-pub trait DomainNameToBytes {
-    fn to_bytes(&self) -> Result<Vec<u8>>;
-}
-
-impl DomainNameToBytes for DomainName {
-    fn to_bytes(&self) -> Result<Vec<u8>> {
-        let mut res = Vec::new();
-        for d in self {
-            res.write_u8(d.len() as u8)?;
-            res.write(d.as_bytes())?;
-        }
-        res.write_u8(0)?;
-        Ok(res)
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct DNSPacket {
@@ -135,6 +89,7 @@ pub enum DNSRdata {
     A(Ipv4Addr),
     Aaaa(Ipv6Addr),
     Cname(DomainName),
+    Mx(u16, DomainName),
     Ns(DomainName),
     Txt(String),
     Other(Vec<u8>),
@@ -146,6 +101,12 @@ impl DNSRdata {
             Self::A(ip) => Vec::from(ip.octets()),
             Self::Aaaa(ip) => Vec::from(ip.octets()),
             Self::Cname(dn) => dn.to_bytes()?,
+            Self::Mx(pref, dn) => {
+                let mut v = Vec::new();
+                v.write_u16::<BigEndian>(*pref)?;
+                v.append(&mut dn.to_bytes()?);
+                v
+            }
             Self::Ns(dn) => dn.to_bytes()?,
             Self::Txt(s) => Vec::from(s.as_bytes()),
             Self::Other(raw) => raw.to_vec(),
@@ -160,6 +121,7 @@ impl DNSRdata {
             Self::A(_) => DNSType::A,
             Self::Aaaa(_) => DNSType::AAAA,
             Self::Cname(_) => DNSType::CNAME,
+            Self::Mx(_, _) => DNSType::MX,
             Self::Ns(_) => DNSType::NS,
             Self::Txt(_) => DNSType::TXT,
             Self::Other(_) => DNSType::NotImplemented,
@@ -424,6 +386,14 @@ impl DNSQuestion {
         writer.write_u16::<BigEndian>(self.qclass)?;
         Ok(())
     }
+
+    pub fn new(qname: DomainName, qtype: u16) -> Self {
+        Self {
+            qname,
+            qtype,
+            qclass: DNSClass::IN as u16,
+        }
+    }
 }
 
 impl DNSResourceRecord {
@@ -433,6 +403,7 @@ impl DNSResourceRecord {
             DNSType::A => DNSRdata::A(rdr.read_ipv4()?),
             DNSType::AAAA => DNSRdata::Aaaa(rdr.read_ipv6()?),
             DNSType::CNAME => DNSRdata::Cname(rdr.read_domain_name()?),
+            DNSType::MX => DNSRdata::Mx(rdr.read_u16::<BigEndian>()?, rdr.read_domain_name()?),
             DNSType::NS => DNSRdata::Ns(rdr.read_domain_name()?),
             DNSType::TXT => DNSRdata::Txt(rdr.read_string_exact(rdlength as usize)?),
             _ => DNSRdata::Other(rdr.read_raw(rdlength as usize)?),

@@ -1,6 +1,5 @@
-use crate::rdns::records::{
-    DNSClass, DNSPacket, DNSQuestion, DNSRcode, DNSRdata, DNSType, ToDomainName, ToReadableName,
-};
+use crate::rdns::domain_name::{ToDomainName, ToReadableName};
+use crate::rdns::records::{DNSClass, DNSPacket, DNSQuestion, DNSRcode, DNSRdata, DNSType};
 use crate::rdns::util::Either::{Left, Right};
 use crate::rdns::util::{Either, RangeRandExtRS, RangeRandExtS, Result};
 use std::collections::{HashMap, HashSet};
@@ -62,6 +61,7 @@ impl Rdns {
                 if original.src_addr == from_addr {
                     self.error(&mut received, DNSRcode::Refused, &from_addr)?;
                 }
+                // if has answer
                 if received.answers.len() != 0 {
                     if original.packet_stack.len() > 1 {
                         let addr = match received.answers[0].rdata.as_ref() {
@@ -85,8 +85,15 @@ impl Rdns {
                     self.send_to(&original.src_addr, &received)?;
                     continue;
                 }
+                // if no answer
                 match self.check_for_ns_addr(&received) {
                     Right(names) => {
+                        // if is empty, then just return the record
+                        if names.is_empty() {
+                            let original = self.id_map.remove(&id).unwrap();
+                            self.send_to(&original.src_addr, &received)?;
+                            continue;
+                        }
                         let n = &names[(0..names.len()).rand()];
                         self.query_for(id, n)?
                     }
@@ -133,11 +140,10 @@ impl Rdns {
             panic!("no");
         }
         let mut pkt = DNSPacket::new(id, true);
-        pkt.questions.push(DNSQuestion {
-            qname: domain_name.to_domain_name(),
-            qclass: DNSClass::IN as u16,
-            qtype: DNSType::A as u16,
-        });
+        pkt.questions.push(DNSQuestion::new(
+            domain_name.to_domain_name(),
+            DNSType::A as u16,
+        ));
         self.new_query(&pkt, &SocketAddr::new(get_a_root_addr()?, 53))?;
         let data = self.id_map.get_mut(&id).unwrap();
         data.packet_stack.push(pkt);
