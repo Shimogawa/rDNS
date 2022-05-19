@@ -47,14 +47,25 @@ pub trait WriteExt: Write {
 
 impl<W: Write + ?Sized> WriteExt for W {}
 
-pub trait RangeRandExt<T> {
+pub trait RangeRandExtS<T> {
     fn rand(self) -> T;
 }
 
-impl<T: SampleUniform + PartialOrd> RangeRandExt<T> for Range<T> {
+pub trait RangeRandExtRS<T> {
+    fn rand(&self) -> T;
+}
+
+impl<T: SampleUniform + PartialOrd> RangeRandExtS<T> for Range<T> {
     fn rand(self) -> T {
         let mut rng = rand::thread_rng();
         rng.gen_range(self)
+    }
+}
+
+impl<T: Clone> RangeRandExtRS<T> for Vec<T> {
+    fn rand(&self) -> T {
+        let mut rng = rand::thread_rng();
+        self[rng.gen_range(0..self.len())].clone()
     }
 }
 

@@ -411,7 +411,7 @@ impl DNSQuestion {
 }
 
 impl DNSResourceRecord {
-    pub fn rdata_from_raw(mut rdr: &mut Cursor<&[u8]>, rtype: u16) -> Result<(u16, Rc<DNSRdata>)> {
+    pub fn rdata_from_raw(rdr: &mut Cursor<&[u8]>, rtype: u16) -> Result<(u16, Rc<DNSRdata>)> {
         let rdlength = rdr.read_u16::<BigEndian>()?;
         let rdata: Rc<DNSRdata> = Rc::new(match DNSType::from_num(rtype) {
             DNSType::A => DNSRdata::A(rdr.read_ipv4()?),

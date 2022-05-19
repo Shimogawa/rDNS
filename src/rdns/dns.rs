@@ -2,7 +2,7 @@ use crate::rdns::records::{
     DNSClass, DNSPacket, DNSQuestion, DNSRcode, DNSRdata, DNSType, ToDomainName, ToReadableName,
 };
 use crate::rdns::util::Either::{Left, Right};
-use crate::rdns::util::{Either, RangeRandExt, Result};
+use crate::rdns::util::{Either, RangeRandExtRS, RangeRandExtS, Result};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 
@@ -56,8 +56,9 @@ impl Rdns {
                 Ok(x) => x,
                 Err(_) => continue,
             };
-            if self.id_map.contains_key(&received.id()) {
-                let original = self.id_map.get(&received.id()).unwrap();
+            let id = received.id();
+            if self.id_map.contains_key(&id) {
+                let original = self.id_map.get(&id).unwrap();
                 if original.src_addr == from_addr {
                     self.error(&mut received, DNSRcode::Refused, &from_addr)?;
                 }
@@ -67,31 +68,27 @@ impl Rdns {
                             DNSRdata::A(ip) => ip,
                             _ => {
                                 // error: must be an A record
-                                self.id_map.remove(&received.id()).unwrap();
+                                self.id_map.remove(&id).unwrap();
                                 continue;
                             }
                         }
                         .clone();
-                        self.id_map
-                            .get_mut(&received.id())
-                            .unwrap()
-                            .packet_stack
-                            .pop();
-                        let original = self.id_map.get(&received.id()).unwrap();
+                        self.id_map.get_mut(&id).unwrap().packet_stack.pop();
+                        let original = self.id_map.get(&id).unwrap();
                         self.new_query(
                             &original.packet_stack.last().unwrap(),
                             &SocketAddr::new(addr.into(), 53),
                         )?;
                         continue;
                     }
-                    let original = self.id_map.remove(&received.id()).unwrap();
+                    let original = self.id_map.remove(&id).unwrap();
                     self.send_to(&original.src_addr, &received)?;
                     continue;
                 }
                 match self.check_for_ns_addr(&received) {
                     Right(names) => {
                         let n = &names[(0..names.len()).rand()];
-                        self.query_for(received.id(), n)?
+                        self.query_for(id, n)?
                     }
                     Left(ip) => self.new_query(
                         &original.packet_stack.last().unwrap(),
@@ -108,13 +105,16 @@ impl Rdns {
                 continue;
             }
             self.id_map.insert(
-                received.id(),
+                id,
                 RdnsData {
                     src_addr: from_addr,
-                    packet_stack: vec![received.clone()],
+                    packet_stack: vec![received],
                 },
             );
-            self.new_query(&received, &SocketAddr::new(get_a_root_addr()?, 53))?;
+            self.new_query(
+                &self.id_map.get(&id).unwrap().packet_stack.last().unwrap(),
+                &SocketAddr::new(get_a_root_addr()?, 53),
+            )?;
         }
     }
 
@@ -169,7 +169,7 @@ impl Rdns {
         if v.is_empty() {
             return Right(nameservs.into_iter().collect());
         }
-        Left(v[(0..v.len()).rand()].clone())
+        Left(*v.rand())
     }
 
     fn error(&self, pkt: &mut DNSPacket, rcode: DNSRcode, addr: &SocketAddr) -> Result<()> {
