@@ -1,7 +1,10 @@
 use crate::rdns::domain_name::{ToDomainName, ToReadableName};
-use crate::rdns::records::{DNSClass, DNSPacket, DNSQuestion, DNSRcode, DNSRdata, DNSType};
+use crate::rdns::records::{
+    DNSClass, DNSHeader, DNSPacket, DNSQuestion, DNSRcode, DNSRdata, DNSResourceRecord, DNSType,
+};
 use crate::rdns::util::Either::{Left, Right};
 use crate::rdns::util::{Either, RangeRandExtRS, RangeRandExtS, Result};
+use chrono::{DateTime, Duration, Local};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 
@@ -36,6 +39,11 @@ pub struct Rdns {
     id_map: HashMap<u16, RdnsData>,
 }
 
+pub struct RdnsCacheEntry {
+    expiration: DateTime<Local>,
+    record: DNSResourceRecord,
+}
+
 impl Rdns {
     fn recv(&mut self, buf: &mut [u8]) -> (usize, SocketAddr) {
         self.socket.recv_from(buf).expect("no data received")
@@ -48,6 +56,7 @@ impl Rdns {
 
     pub fn start(&mut self) -> Result<()> {
         let mut buf = [0u8; 4096];
+        let mut cache: HashMap<(u16, String), RdnsCacheEntry> = HashMap::new();
         loop {
             let (num_read, from_addr) = self.recv(&mut buf);
             let cbuf = &buf[..num_read];
@@ -56,6 +65,7 @@ impl Rdns {
                 Err(_) => continue,
             };
             let id = received.id();
+            // if is an existing query
             if self.id_map.contains_key(&id) {
                 let original = self.id_map.get(&id).unwrap();
                 if original.src_addr == from_addr {
@@ -63,6 +73,7 @@ impl Rdns {
                 }
                 // if has answer
                 if received.answers.len() != 0 {
+                    // if is the answer to a self-generated query for NS information
                     if original.packet_stack.len() > 1 {
                         let addr = match received.answers[0].rdata.as_ref() {
                             DNSRdata::A(ip) => ip,
@@ -80,6 +91,16 @@ impl Rdns {
                             &SocketAddr::new(addr.into(), 53),
                         )?;
                         continue;
+                    }
+                    // if is the answer to the original query
+                    for ans in &received.answers {
+                        cache.insert(
+                            (ans.r#type, ans.name.to_domain_name()),
+                            RdnsCacheEntry {
+                                expiration: Local::now() + Duration::seconds(ans.ttl as i64),
+                                record: ans.clone(),
+                            },
+                        );
                     }
                     let original = self.id_map.remove(&id).unwrap();
                     self.send_to(&original.src_addr, &received)?;
@@ -110,6 +131,32 @@ impl Rdns {
             }
             if received.answers.len() != 0 {
                 continue;
+            }
+            // check cache
+            let question = &received.questions[0];
+            match cache.get(&(question.qtype, question.qname.to_domain_name())) {
+                Some(cached_res) => {
+                    if Local::now() >= cached_res.expiration {
+                        cache.remove(&(question.qtype, question.qname.to_domain_name()));
+                        ()
+                    } else {
+                        let mut rec = cached_res.record.clone();
+                        rec.ttl = (cached_res.expiration - Local::now()).num_seconds() as u32;
+                        // return result
+                        self.send_to(
+                            &from_addr,
+                            &DNSPacket {
+                                header: DNSHeader::new(received.id(), false),
+                                questions: vec![question.clone()],
+                                answers: vec![rec],
+                                authorities: vec![],
+                                additionals: vec![],
+                            },
+                        )?;
+                        continue;
+                    }
+                }
+                None => (),
             }
             self.id_map.insert(
                 id,

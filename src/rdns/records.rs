@@ -79,6 +79,8 @@ pub struct DNSResourceRecord {
     pub name: DomainName,
     pub r#type: u16,
     pub class: u16,
+    /// the time interval (in seconds) that the resource record
+    /// may be cached before it should be discarded
     pub ttl: u32,
     pub rdlength: u16,
     pub rdata: Rc<DNSRdata>,
